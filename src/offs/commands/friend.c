@@ -10,36 +10,64 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Read an entire file into a malloc'd buffer. Returns 0 on success (caller
- * frees *out_data), -1 on failure. */
+/* Result codes for read_file_contents. */
+#define READ_FILE_OK          0
+#define READ_FILE_IO_ERROR   -1  /* errno meaningful; already perror'd */
+#define READ_FILE_EMPTY      -2  /* zero-length file */
+#define READ_FILE_TOO_LARGE  -3  /* exceeds the QR payload cap */
+
+/* A QR image (PPM) is at most ~1.7 MB; the peer-info wire payload caps at
+ * 2 MB. Reject anything larger before allocating. */
+#define QR_FILE_MAX_BYTES (2u * 1024u * 1024u)
+
+/* Read an entire file into a malloc'd buffer. Returns READ_FILE_OK on
+ * success (caller frees *out_data). I/O failures are reported with perror
+ * here and return READ_FILE_IO_ERROR; empty and oversized files return
+ * READ_FILE_EMPTY / READ_FILE_TOO_LARGE so the caller can print a specific
+ * message. */
 static int read_file_contents(const char* path, uint8_t** out_data,
                               size_t* out_size) {
   FILE* file = fopen(path, "rb");
-  if (file == NULL) return -1;
+  if (file == NULL) {
+    perror(path);
+    return READ_FILE_IO_ERROR;
+  }
   if (fseek(file, 0, SEEK_END) != 0) {
+    perror("fseek");
     fclose(file);
-    return -1;
+    return READ_FILE_IO_ERROR;
   }
   long file_length = ftell(file);
   if (file_length < 0) {
+    perror("ftell");
     fclose(file);
-    return -1;
+    return READ_FILE_IO_ERROR;
+  }
+  if (file_length == 0) {
+    fclose(file);
+    return READ_FILE_EMPTY;
+  }
+  if ((size_t)file_length > QR_FILE_MAX_BYTES) {
+    fclose(file);
+    return READ_FILE_TOO_LARGE;
   }
   rewind(file);
   uint8_t* buffer = (uint8_t*)malloc((size_t)file_length);
   if (buffer == NULL) {
+    perror("malloc");
     fclose(file);
-    return -1;
+    return READ_FILE_IO_ERROR;
   }
   if (fread(buffer, 1, (size_t)file_length, file) != (size_t)file_length) {
+    perror("fread");
     free(buffer);
     fclose(file);
-    return -1;
+    return READ_FILE_IO_ERROR;
   }
   fclose(file);
   *out_data = buffer;
   *out_size = (size_t)file_length;
-  return 0;
+  return READ_FILE_OK;
 }
 
 int cmd_friend(int argc, char** argv, cli_client_t* client) {
@@ -65,9 +93,17 @@ int cmd_friend(int argc, char** argv, cli_client_t* client) {
         fprintf(stderr, "%s\n", L10N_FRIEND_ADD_USAGE);
         return 1;
       }
-      if (read_file_contents(argv[2], &file_data, &file_size) != 0) {
-        fprintf(stderr, "cannot read %s\n", argv[2]);
+      int read_rc = read_file_contents(argv[2], &file_data, &file_size);
+      if (read_rc == READ_FILE_EMPTY) {
+        fprintf(stderr, L10N_PUT_EMPTY_FILE "\n");
         return 1;
+      }
+      if (read_rc == READ_FILE_TOO_LARGE) {
+        fprintf(stderr, "%s: %s\n", argv[2], L10N_FILE_TOO_LARGE);
+        return 1;
+      }
+      if (read_rc != READ_FILE_OK) {
+        return 1;  /* details already reported via perror */
       }
       format = 2;
     }
