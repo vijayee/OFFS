@@ -10,6 +10,38 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Read an entire file into a malloc'd buffer. Returns 0 on success (caller
+ * frees *out_data), -1 on failure. */
+static int read_file_contents(const char* path, uint8_t** out_data,
+                              size_t* out_size) {
+  FILE* file = fopen(path, "rb");
+  if (file == NULL) return -1;
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    return -1;
+  }
+  long file_length = ftell(file);
+  if (file_length < 0) {
+    fclose(file);
+    return -1;
+  }
+  rewind(file);
+  uint8_t* buffer = (uint8_t*)malloc((size_t)file_length);
+  if (buffer == NULL) {
+    fclose(file);
+    return -1;
+  }
+  if (fread(buffer, 1, (size_t)file_length, file) != (size_t)file_length) {
+    free(buffer);
+    fclose(file);
+    return -1;
+  }
+  fclose(file);
+  *out_data = buffer;
+  *out_size = (size_t)file_length;
+  return 0;
+}
+
 int cmd_friend(int argc, char** argv, cli_client_t* client) {
   if (argc < 1) {
     printf("Usage: offs friend <add|remove|list> ...\n");
@@ -24,13 +56,38 @@ int cmd_friend(int argc, char** argv, cli_client_t* client) {
       return 1;
     }
 
+    uint8_t format = 0;  /* existing behavior: raw text argument */
+    uint8_t* file_data = NULL;
+    size_t file_size = 0;
+
+    if (strcmp(argv[1], "--qr") == 0) {
+      if (argc < 3) {
+        fprintf(stderr, "%s\n", L10N_FRIEND_ADD_USAGE);
+        return 1;
+      }
+      if (read_file_contents(argv[2], &file_data, &file_size) != 0) {
+        fprintf(stderr, "cannot read %s\n", argv[2]);
+        return 1;
+      }
+      format = 2;
+    }
+
     client_api_friend_add_t friend_req;
     memset(&friend_req, 0, sizeof(friend_req));
-    friend_req.format = 0;
-    friend_req.data = (uint8_t*)argv[1];
-    friend_req.data_size = strlen(argv[1]);
+    friend_req.format = format;
+    friend_req.data = file_data != NULL ? file_data : (uint8_t*)argv[1];
+    friend_req.data_size = file_data != NULL ? file_size : strlen(argv[1]);
 
     cbor_item_t* request = client_api_friend_add_encode(&friend_req);
+    /* encode copies the payload (cbor_build_bytestring), so the file buffer
+     * is no longer needed once the request frame exists. */
+    free(file_data);
+    file_data = NULL;
+
+    if (request == NULL) {
+      fprintf(stderr, "%s\n", L10N_ERROR);
+      return 1;
+    }
     cbor_item_t* response = cli_client_send(client, request);
     cbor_decref(&request);
     if (response == NULL) {

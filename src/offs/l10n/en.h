@@ -53,7 +53,7 @@
 #define L10N_BLOCK_DELETE_USAGE     "Usage: offs block delete <hash>"
 #define L10N_PEER_INFO_PROMPT       "Peer Information:"
 #define L10N_PEER_LIST_PROMPT       "Connected Peers:"
-#define L10N_PEER_CONNECT_USAGE     "Usage: offs peer connect <addr>"
+#define L10N_PEER_CONNECT_USAGE     "Usage: offs peer connect <addr> | --qr <ppm-file>"
 #define L10N_CONFIG_SHOW_PROMPT     "Current Configuration:"
 #define L10N_CONFIG_USAGE           "Usage: offs config <show|get <field>|set <field>=<value>|add <field> <value>|remove <field>|set-auth <hash>|generate-auth <key> [--cost N]|reload>"
 #define L10N_CONFIG_STAGED          "staged (restart to apply)"
@@ -63,7 +63,7 @@
 #define L10N_CONFIG_BAD_COST        "invalid --cost: must be an integer in 4..31"
 #define L10N_CONFIG_HASH_FAILED     "failed to generate bcrypt hash"
 #define L10N_CONFIG_NO_FIELD        "no such field"
-#define L10N_FRIEND_ADD_USAGE       "Usage: offs friend add <data>"
+#define L10N_FRIEND_ADD_USAGE       "Usage: offs friend add <data> | --qr <ppm-file>"
 #define L10N_FRIEND_REMOVE_USAGE    "Usage: offs friend remove <node-id>"
 #define L10N_FRIEND_LIST_PROMPT     "Friends:"
 
