@@ -11,6 +11,7 @@
 /* Forward declarations for command handlers (implemented in commands/) */
 int cmd_put(int argc, char** argv, cli_client_t* client);
 int cmd_get(int argc, char** argv, cli_client_t* client);
+int cmd_load(int argc, char** argv, cli_client_t* client);
 int cmd_block(int argc, char** argv, cli_client_t* client);
 int cmd_peer(int argc, char** argv, cli_client_t* client);
 int cmd_config(int argc, char** argv, cli_client_t* client);
@@ -28,6 +29,7 @@ static cli_command_t g_commands[] = {
   {"restart", L10N_RESTART_DESC, cmd_restart},
   {"put",     L10N_PUT_DESC,     cmd_put},
   {"get",     L10N_GET_DESC,     cmd_get},
+  {"load",    L10N_LOAD_DESC,    cmd_load},
   {"block",   L10N_BLOCK_DESC,   cmd_block},
   {"peer",    L10N_PEER_DESC,    cmd_peer},
   {"config",  L10N_CONFIG_DESC,  cmd_config},
