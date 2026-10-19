@@ -1220,7 +1220,7 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
     server->unix_transport = unix_transport_create(
         server->pool, server->block_cache, server->ofd_cache,
         server->tuple_cache, args->unix_path, NULL,
-        &server->health_ctx);
+        &server->health_ctx, 0666);
     if (server->unix_transport == NULL) {
       fprintf(stderr, "Failed to create Unix transport on %s\n",
               args->unix_path);
