@@ -196,6 +196,7 @@ typedef struct {
   const char* node_key_path;
   const char* relay_url;
   size_t      max_capacity_bytes;
+  unsigned    unix_socket_mode;  // 0 = default 0666; octal, validated [0, 0777]
   const char* api_key;
   char*       bootstrap_peers;  // CSV of "host:port" network entry points
   uint16_t    ws_port;
@@ -224,6 +225,9 @@ static void _print_usage(const char* program) {
                   "                       \\.\\pipe\\liboffs-<basename>; POSIX: no default —\n"
                   "                       pass --unix to enable the local socket)\n",
           OFFS_LOCAL_SOCKET_PATH);
+  fprintf(stderr, "  --unix-socket-mode <mode>  Local socket permissions as 3-4 octal\n"
+                  "                       digits (POSIX only; default: 0666; e.g. 0660 restricts\n"
+                  "                       to group users, 0600 to the daemon's user)\n");
   fprintf(stderr, "  --cache-dir <dir>    Block cache directory\n");
   fprintf(stderr, "  --config-dir <dir>   Node config/state directory (certs, peer store,\n                       pending config). Default: machine state dir —\n                       %%ProgramData%%\\offs on Windows (always), /etc/offs\n                       as root (macOS /Library/Application Support/offs),\n                       ~/.config/offs otherwise\n");
   fprintf(stderr, "  --pid-file <path>    PID file path\n");
@@ -338,6 +342,18 @@ static int _parse_config_file(const char* path, offsd_args_t* args) {
     cJSON* max_cap = cJSON_GetObjectItem(network, "max-capacity-bytes");
     if (cJSON_IsNumber(max_cap) && args->max_capacity_bytes == 0) {
       args->max_capacity_bytes = (size_t)max_cap->valuedouble;
+    }
+    cJSON* unix_mode = cJSON_GetObjectItem(network, "unix-socket-mode");
+    if (cJSON_IsString(unix_mode) && args->unix_socket_mode == 0) {
+      char* end = NULL;
+      unsigned long long parsed_mode = strtoull(unix_mode->valuestring, &end, 8);
+      if (end == NULL || *end != '\0' || parsed_mode > 0777) {
+        fprintf(stderr, "Invalid network[unix-socket-mode]: '%s' (octal string like \"0666\", range 0600-0777)\n",
+                unix_mode->valuestring);
+        cJSON_Delete(root);
+        return -1;
+      }
+      args->unix_socket_mode = (unsigned)parsed_mode;
     }
     cJSON* bootstrap = cJSON_GetObjectItem(network, "bootstrap-peers");
     if (cJSON_IsString(bootstrap) && args->bootstrap_peers == NULL) {
@@ -526,6 +542,15 @@ static int _parse_args(int argc, char** argv, offsd_args_t* args) {
       if (_arg_string_set(&args->relay_url, argv[++i]) != 0) return -1;
     } else if (strcmp(argv[i], "--max-capacity-bytes") == 0 && i + 1 < argc) {
       args->max_capacity_bytes = (size_t)strtoull(argv[++i], NULL, 10);
+    } else if (strcmp(argv[i], "--unix-socket-mode") == 0 && i + 1 < argc) {
+      char* end = NULL;
+      unsigned long long parsed_mode = strtoull(argv[++i], &end, 8);
+      if (end == NULL || *end != '\0' || parsed_mode > 0777) {
+        fprintf(stderr, "Invalid --unix-socket-mode '%s' (3-4 octal digits, e.g. 0666, range 0600-0777)\n",
+                argv[i]);
+        return -1;
+      }
+      args->unix_socket_mode = (unsigned)parsed_mode;
     } else if (strcmp(argv[i], "--api-key") == 0 && i + 1 < argc) {
       if (_arg_string_set(&args->api_key, argv[++i]) != 0) return -1;
     } else if (strcmp(argv[i], "--bootstrap") == 0 && i + 1 < argc) {
@@ -1220,7 +1245,7 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
     server->unix_transport = unix_transport_create(
         server->pool, server->block_cache, server->ofd_cache,
         server->tuple_cache, args->unix_path, NULL,
-        &server->health_ctx, 0666);
+        &server->health_ctx, args->unix_socket_mode);
     if (server->unix_transport == NULL) {
       fprintf(stderr, "Failed to create Unix transport on %s\n",
               args->unix_path);

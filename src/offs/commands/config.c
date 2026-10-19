@@ -52,6 +52,8 @@ static void _print_config_help(void) {
     "    max_capacity_bytes    Max bytes the block cache will hold (0 = disabled);\n"
     "                          the pre-flight PUT check rejects oversized uploads\n"
     "                          when this is > 0 and wired to block_cache_create\n"
+    "    unix_socket_mode      Local unix-socket permission mode as an octal\n"
+    "                          string like \"0666\" (POSIX only; default \"0666\")\n"
     "    scheduler_thread_count  Worker threads in the scheduler pool (0 = auto)\n"
     "    http_port             TCP port for the HTTP server (0 = disabled)\n"
     "    https_port            TCP port for the HTTPS server (0 = disabled)\n"
