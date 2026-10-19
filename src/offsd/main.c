@@ -225,9 +225,9 @@ static void _print_usage(const char* program) {
                   "                       \\.\\pipe\\liboffs-<basename>; POSIX: no default —\n"
                   "                       pass --unix to enable the local socket)\n",
           OFFS_LOCAL_SOCKET_PATH);
-  fprintf(stderr, "  --unix-socket-mode <mode>  Local socket permissions as 3-4 octal\n"
-                  "                       digits (POSIX only; default: 0666; e.g. 0660 restricts\n"
-                  "                       to group users, 0600 to the daemon's user)\n");
+  fprintf(stderr, "  --unix-socket-mode <mode>  Local socket permissions, octal (POSIX only;\n"
+                  "                       default: 0666). Config file: network[\"unix-socket-mode\"]\n"
+                  "                       as an octal string, e.g. \"0666\"\n");
   fprintf(stderr, "  --cache-dir <dir>    Block cache directory\n");
   fprintf(stderr, "  --config-dir <dir>   Node config/state directory (certs, peer store,\n                       pending config). Default: machine state dir —\n                       %%ProgramData%%\\offs on Windows (always), /etc/offs\n                       as root (macOS /Library/Application Support/offs),\n                       ~/.config/offs otherwise\n");
   fprintf(stderr, "  --pid-file <path>    PID file path\n");
@@ -349,16 +349,18 @@ static int _parse_config_file(const char* path, offsd_args_t* args) {
       cJSON_Delete(root);
       return -1;
     }
-    if (cJSON_IsString(unix_mode) && args->unix_socket_mode == 0) {
+    if (cJSON_IsString(unix_mode) && unix_mode->valuestring[0] != '\0') {
       char* end = NULL;
       unsigned long long parsed_mode = strtoull(unix_mode->valuestring, &end, 8);
       if (end == NULL || *end != '\0' || parsed_mode > 0777) {
-        fprintf(stderr, "Invalid network[unix-socket-mode]: '%s' (octal string like \"0666\", range 0600-0777)\n",
+        fprintf(stderr, "Invalid network[unix-socket-mode]: '%s' (octal string like \"0666\")\n",
                 unix_mode->valuestring);
         cJSON_Delete(root);
         return -1;
       }
-      args->unix_socket_mode = (unsigned)parsed_mode;
+      if (args->unix_socket_mode == 0) {
+        args->unix_socket_mode = (unsigned)parsed_mode;
+      }
     }
     cJSON* bootstrap = cJSON_GetObjectItem(network, "bootstrap-peers");
     if (cJSON_IsString(bootstrap) && args->bootstrap_peers == NULL) {
@@ -551,8 +553,7 @@ static int _parse_args(int argc, char** argv, offsd_args_t* args) {
       char* end = NULL;
       unsigned long long parsed_mode = strtoull(argv[++i], &end, 8);
       if (end == NULL || *end != '\0' || parsed_mode > 0777) {
-        fprintf(stderr, "Invalid --unix-socket-mode '%s' (3-4 octal digits, e.g. 0666, range 0600-0777)\n",
-                argv[i]);
+        fprintf(stderr, "Invalid --unix-socket-mode '%s' (octal, e.g. 0666)\n", argv[i]);
         return -1;
       }
       args->unix_socket_mode = (unsigned)parsed_mode;
