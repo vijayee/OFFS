@@ -344,6 +344,11 @@ static int _parse_config_file(const char* path, offsd_args_t* args) {
       args->max_capacity_bytes = (size_t)max_cap->valuedouble;
     }
     cJSON* unix_mode = cJSON_GetObjectItem(network, "unix-socket-mode");
+    if (unix_mode != NULL && !cJSON_IsString(unix_mode)) {
+      fprintf(stderr, "Invalid network[unix-socket-mode]: must be an octal string like \"0666\"\n");
+      cJSON_Delete(root);
+      return -1;
+    }
     if (cJSON_IsString(unix_mode) && args->unix_socket_mode == 0) {
       char* end = NULL;
       unsigned long long parsed_mode = strtoull(unix_mode->valuestring, &end, 8);
