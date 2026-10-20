@@ -1,0 +1,13 @@
+#!/bin/sh
+# Enable and start (or restart on upgrade) the systemd unit so installing
+# the deb leaves a running daemon — no manual systemctl call needed.
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload
+  systemctl enable offsd >/dev/null 2>&1 || true
+  if systemctl is-active --quiet offsd; then
+    systemctl try-restart offsd || true
+  else
+    systemctl start offsd || echo "postinst: failed to start offsd; inspect with systemctl status offsd"
+  fi
+fi
+exit 0

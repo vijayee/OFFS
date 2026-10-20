@@ -265,7 +265,8 @@ file(COPY ${CMAKE_BINARY_DIR}/deps/liboffs/deps/BLAKE3/c/libblake3.pc
 # ---------------------------------------------------------------------------
 # Installation / packaging (Linux deb). The deb ships only the daemon, CLI,
 # updater, and metrics server plus the default config and the systemd unit
-# (not auto-enabled) — everything in the "offs-bin" component. Vendored
+# (auto-enabled and started on install, restarted on upgrade — see
+# packaging/postinst) — everything in the "offs-bin" component. Vendored
 # dependency install rules (gtest, pcre2, blake3, ...) are uncomponentized
 # and therefore excluded from the package. Generate with `cpack -G DEB` in
 # the build directory.
@@ -314,6 +315,7 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.34), libssl3 (>= 3.0), libatomic1 (>= 4.8), libnuma1 (>= 2.0.11)")
 set(CPACK_DEBIAN_OFFS-BIN_PACKAGE_NAME "offsd")
 set(CPACK_DEBIAN_OFFS-BIN_PACKAGE_CONTROL_EXTRA
+  "${CMAKE_CURRENT_SOURCE_DIR}/packaging/postinst"
   "${CMAKE_CURRENT_SOURCE_DIR}/packaging/postrm")
 set(CPACK_DEBIAN_OFFS-BIN_FILE_NAME "offsd-0.1.1-Linux.deb")
 include(CPack)
