@@ -220,10 +220,10 @@ static void _print_usage(const char* program) {
   fprintf(stderr, "  --host <addr>        Bind address (default: 0.0.0.0; use :: for dual-stack)\n");
   fprintf(stderr, "  --port <port>        HTTP port, 0 to disable (default: 23402)\n");
   fprintf(stderr, "  --quic-port <port>   QUIC/P2P listener port, 0 to disable (default: 23401)\n");
-  fprintf(stderr, "  --unix <path>        Local RPC socket path (Windows default: %s,\n"
-                  "                       mapped by platform_local to the named pipe\n"
-                  "                       \\.\\pipe\\liboffs-<basename>; POSIX: no default —\n"
-                  "                       pass --unix to enable the local socket)\n",
+  fprintf(stderr, "  --unix <path>        Local RPC socket path, %s by default on\n"
+                  "                       both platforms (POSIX unix socket; on Windows\n"
+                  "                       platform_local maps the path to the named pipe\n"
+                  "                       \\.\\pipe\\liboffs-<basename>)\n",
           OFFS_LOCAL_SOCKET_PATH);
   fprintf(stderr, "  --unix-socket-mode <mode>  Local socket permissions, octal (POSIX only;\n"
                   "                       default: 0666). Config file: network[\"unix-socket-mode\"]\n"
@@ -600,18 +600,17 @@ static int _parse_args(int argc, char** argv, offsd_args_t* args) {
     args->worker_count = 1;
   }
 
-#ifdef _WIN32
-  /* The SCM launches the service binary with no arguments (offs.wxs
-   * ServiceInstall has no arguments), so without a default the local RPC
-   * socket would never exist and the CLI could not reach the daemon.
-   * Default to the same path the CLI assumes; on Windows platform_local
-   * maps it to the \\.\pipe\liboffs-<basename> named pipe. _free_args
-   * frees this field, so it must go through _arg_string_set (strdup),
-   * never a string literal. */
+  /* Service managers launch the daemon with no arguments (the SCM on
+   * Windows, the systemd unit on POSIX), so without a default the local
+   * RPC socket would never exist and the CLI — which hard-assumes
+   * OFFS_LOCAL_SOCKET_PATH — could not reach the daemon. Default to the
+   * path the CLI probes; on Windows platform_local maps it to the
+   * \\.\pipe\liboffs-<basename> named pipe. _free_args frees this field,
+   * so it must go through _arg_string_set (strdup), never a string
+   * literal. */
   if (args->unix_path == NULL) {
     if (_arg_string_set(&args->unix_path, OFFS_LOCAL_SOCKET_PATH) != 0) return -1;
   }
-#endif
 
   return 0;
 }
