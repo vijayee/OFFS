@@ -1,0 +1,51 @@
+﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui" xmlns:fire="http://wixtoolset.org/schemas/v4/wxs/firewall">
+  <Package Name="OFFS" Language="1033" Version="0.1.0" Manufacturer="Prometheus-SCN" UpgradeCode="12345678-1234-1234-1234-123456789ABC"><MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version is already installed." />
+    <Icon Id="OffsIcon" SourceFile="offs.ico" />
+    <Property Id="ARPPRODUCTICON" Value="OffsIcon" />
+    <MediaTemplate EmbedCab="yes" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLDIR" />
+    <Feature Id="Complete" Title="OFFS" Level="1">
+      <ComponentGroupRef Id="Binaries" />
+    </Feature>
+    
+    <ComponentGroup Id="Binaries">
+      <ComponentRef Id="OffsDaemon" />
+      <ComponentRef Id="OffsCli" />
+      <ComponentRef Id="OffsUpdater" />
+      <ComponentRef Id="OffsCa" />
+      <ComponentRef Id="MsquicDll" />
+    </ComponentGroup>
+  
+      <StandardDirectory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="OFFS">
+          <Component Id="OffsDaemon" Guid="22345678-1234-1234-1234-123456789ABC">
+            <File Id="offsDaemonExe" Name="offs-daemon.exe" Source="offs-daemon.exe" KeyPath="yes">
+              <!-- Peer connections are inbound QUIC (UDP 23401 plus the
+                   HTTP API on 23402); without this rule the firewall drops
+                   the initial QUIC handshake and other nodes can never
+                   dial the installed daemon. -->
+              <fire:FirewallException Id="OffsDaemonFirewall" Name="OFFS Daemon (offs-daemon.exe)" Scope="any" Profile="all" />
+            </File>
+            <ServiceInstall Id="OffsDaemonService" Type="ownProcess" Name="offs-daemon" DisplayName="OFFS Daemon" Description="Owner Free File System Daemon" Start="auto" ErrorControl="normal" Arguments="--log-file &quot;C:\ProgramData\offs\offsd.log&quot; --log-level trace" />
+            <ServiceControl Id="OffsDaemonControl" Name="offs-daemon" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+          </Component>
+          <Component Id="OffsCli" Guid="32345678-1234-1234-1234-123456789ABC">
+            <File Id="offsCliExe" Name="offs.exe" Source="offs.exe" KeyPath="yes" />
+            <Environment Id="OffsPath" Action="set" Name="PATH" Part="last" System="yes" Value="[INSTALLDIR]" />
+          </Component>
+          <Component Id="OffsUpdater" Guid="42345678-1234-1234-1234-123456789ABC">
+            <File Id="offsUpdaterExe" Name="offs-updater.exe" Source="offs-updater.exe" KeyPath="yes" />
+          </Component>
+          <Component Id="OffsCa" Guid="52345678-1234-1234-1234-123456789ABC">
+            <File Id="offsCaExe" Name="offs-ca.exe" Source="offs-ca.exe" KeyPath="yes" />
+          </Component>
+          <!-- The daemon loads QUIC via msquic.dll from the DLL search path;
+               the in-tree build provides no system libmsquic, so it must be
+               installed beside offs-daemon.exe or the QUIC bootstrap fails. -->
+          <Component Id="MsquicDll" Guid="62345678-1234-1234-1234-123456789ABC">
+            <File Id="msquicDll" Name="msquic.dll" Source="msquic.dll" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </StandardDirectory>
+    </Package>
+</Wix>

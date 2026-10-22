@@ -87,6 +87,39 @@ static update_actor_t* g_update_actor = NULL;
    _startup with the pending config applied. */
 static ATOMIC(uint8_t) g_restart_requested = 0;
 
+/* Shutdown watchdog. The final msquic registration drain can block on a
+   connection no peer will ever finish (a black-holed relay or a dial arriving
+   during teardown), which parks the process in StopPending until an external
+   kill — the SCM waits indefinitely for WIN32_OWN_PROCESS (thread-stack dump
+   of a wedged stop, 2026-10-21). The watchdog fires once per armed shutdown:
+   if teardown has not completed after SHUTDOWN_WATCHDOG_MS the process
+   force-exits so the service manager is never held hostage. The thread is
+   created once for the process lifetime and re-armed by every _shutdown
+   (including reload restarts); it is never joined, so reload cycles leak no
+   per-cycle thread handle. */
+#define SHUTDOWN_WATCHDOG_MS 45000
+static ATOMIC(uint8_t) g_shutdown_active = 0;
+static platform_thread_t* g_shutdown_watchdog_thread = NULL;
+
+static void* _shutdown_watchdog_thread(void* arg) {
+  (void)arg;
+  platform_thread_setup_stack();
+  for (;;) {
+    platform_sleep_ms(SHUTDOWN_WATCHDOG_MS);
+    if (ATOMIC_LOAD(&g_shutdown_active)) {
+      fprintf(stderr, "shutdown watchdog: teardown exceeded %dms — force-exiting\n",
+              SHUTDOWN_WATCHDOG_MS);
+#ifdef _WIN32
+      TerminateProcess(GetCurrentProcess(), 1);
+#else
+      platform_sleep_ms(100);
+      _exit(1);
+#endif
+    }
+  }
+  return NULL;
+}
+
 static void _signal_handler(int sig) {
 #ifndef _WIN32
   if (sig == SIGHUP && g_update_actor != NULL) {
@@ -1539,6 +1572,18 @@ static void _start_listening(offsd_server_t* server,
 static void _shutdown(offsd_server_t* server, const char* pid_file) {
   printf("Shutting down...\n");
 
+  /* Arm the watchdog (launch the thread once, lazily — see its comment). The
+     clear below runs on every exit path; the thread re-arms on the next
+     reload/shutdown cycle. */
+  ATOMIC_STORE(&g_shutdown_active, 1);
+  if (g_shutdown_watchdog_thread == NULL) {
+    g_shutdown_watchdog_thread = platform_thread_create(
+        _shutdown_watchdog_thread, NULL);
+    if (g_shutdown_watchdog_thread != NULL) {
+      platform_thread_detach(g_shutdown_watchdog_thread);
+    }
+  }
+
   /* 1. Stop Unix transport */
   if (server->unix_transport != NULL) {
     unix_transport_stop(server->unix_transport);
@@ -1631,6 +1676,7 @@ static void _shutdown(offsd_server_t* server, const char* pid_file) {
   /* Unlink PID file */
   _remove_pid_file(pid_file);
 
+  ATOMIC_STORE(&g_shutdown_active, 0);
   printf("Server stopped\n");
 }
 
@@ -1740,6 +1786,24 @@ static int _run_offsd(int argc, char** argv) {
   if (args.log_structured) {
     log_set_structured(true);
   }
+#ifndef _WIN32
+  /* POSIX daemonize already dup2's the log file over stdout/stderr. */
+#else
+  /* Windows services discard stdout (the SCM runs the process console-less),
+     so --log-file attaches a real file sink here; log.c's file callback
+     flushes after every event, which is what makes the SCM service's
+     shutdown sequence observable at all. */
+  if (args.log_file != NULL) {
+    FILE* log_fp = fopen(args.log_file, "a");
+    if (log_fp == NULL) {
+      fprintf(stderr, "log file open failed: %s\n", args.log_file);
+    } else {
+      int file_level = args.log_level_str != NULL
+          ? log_level_from_string(args.log_level_str) : LOG_INFO;
+      log_add_fp(log_fp, file_level);
+    }
+  }
+#endif
 
   /* Print banner (before daemonization so it's visible) */
   printf("OFF System Daemon (offsd)\n");

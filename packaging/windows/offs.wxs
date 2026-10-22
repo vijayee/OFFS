@@ -26,7 +26,7 @@
                    dial the installed daemon. -->
               <fire:FirewallException Id="OffsDaemonFirewall" Name="OFFS Daemon (offs-daemon.exe)" Scope="any" Profile="all" />
             </File>
-            <ServiceInstall Id="OffsDaemonService" Type="ownProcess" Name="offs-daemon" DisplayName="OFFS Daemon" Description="Owner Free File System Daemon" Start="auto" ErrorControl="normal" />
+            <ServiceInstall Id="OffsDaemonService" Type="ownProcess" Name="offs-daemon" DisplayName="OFFS Daemon" Description="Owner Free File System Daemon" Start="auto" ErrorControl="normal" Arguments="--log-file &quot;C:\ProgramData\offs\offsd.log&quot; --log-level trace" />
             <ServiceControl Id="OffsDaemonControl" Name="offs-daemon" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
           </Component>
           <Component Id="OffsCli" Guid="32345678-1234-1234-1234-123456789ABC">
