@@ -101,6 +101,39 @@ static ATOMIC(uint8_t) g_restart_requested = 0;
 static ATOMIC(uint8_t) g_shutdown_active = 0;
 static platform_thread_t* g_shutdown_watchdog_thread = NULL;
 
+#ifdef _WIN32
+/* Write a minidump of this (still-running) process before the watchdog's
+   force-exit, so every over-long teardown leaves analyzing evidence. The
+   dump goes beside the service's log; includes full memory of active
+   threads' stacks (SmallDump = thread stacks + handles). */
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+
+static void _watchdog_self_dump(void) {
+  char dump_path[MAX_PATH];
+  snprintf(dump_path, sizeof(dump_path), "C:\\ProgramData\\offs\\offsd-stop.dmp");
+  HANDLE file = CreateFileA(dump_path, GENERIC_WRITE, 0, NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) {
+    fprintf(stderr, "shutdown watchdog: dump open failed: %lu\n", GetLastError());
+    return;
+  }
+  HANDLE self = GetCurrentProcess();
+  DWORD self_id = GetCurrentProcessId();
+  MINIDUMP_EXCEPTION_INFORMATION exc;
+  ZeroMemory(&exc, sizeof(exc));
+  exc.ThreadId = GetCurrentThreadId();
+  exc.ExceptionPointers = NULL;
+  exc.ClientPointers = FALSE;
+  BOOL ok = MiniDumpWriteDump(self, self_id, file,
+      MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules,
+      &exc, NULL, NULL);
+  fprintf(stderr, "shutdown watchdog: minidump %s to %s (err %lu)\n",
+          ok ? "written" : "FAILED", dump_path, ok ? 0 : GetLastError());
+  CloseHandle(file);
+}
+#endif
+
 static void* _shutdown_watchdog_thread(void* arg) {
   (void)arg;
   platform_thread_setup_stack();
@@ -110,6 +143,7 @@ static void* _shutdown_watchdog_thread(void* arg) {
       fprintf(stderr, "shutdown watchdog: teardown exceeded %dms — force-exiting\n",
               SHUTDOWN_WATCHDOG_MS);
 #ifdef _WIN32
+      _watchdog_self_dump();
       TerminateProcess(GetCurrentProcess(), 1);
 #else
       platform_sleep_ms(100);
@@ -119,6 +153,39 @@ static void* _shutdown_watchdog_thread(void* arg) {
   }
   return NULL;
 }
+
+#ifdef _WIN32
+/* Crash-time minidump (same evidence as the watchdog dump, but for an actual
+ * crash): goes to ProgramData\offs\offsd-crash.dmp so a crash-during-hunt is
+ * analyzable without Admin access to the WER archive. Reentrant-crash during
+ * the dump falls through to the previous handler via EXCEPTION_CONTINUE_SEARCH
+ * only after a successful write; anything else defers to WER. */
+static LONG WINAPI _crash_dump_filter(struct _EXCEPTION_POINTERS* exception) {
+  char dump_path[MAX_PATH];
+  snprintf(dump_path, sizeof(dump_path), "C:\\ProgramData\\offs\\offsd-crash.dmp");
+  HANDLE file = CreateFileA(dump_path, GENERIC_WRITE, 0, NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  LONG action = EXCEPTION_CONTINUE_SEARCH;
+  if (file != INVALID_HANDLE_VALUE) {
+    HANDLE self = GetCurrentProcess();
+    DWORD self_id = GetCurrentProcessId();
+    MINIDUMP_EXCEPTION_INFORMATION exc;
+    ZeroMemory(&exc, sizeof(exc));
+    exc.ThreadId = GetCurrentThreadId();
+    exc.ExceptionPointers = exception;
+    exc.ClientPointers = FALSE;
+    BOOL ok = MiniDumpWriteDump(self, self_id, file,
+        MiniDumpNormal | MiniDumpWithThreadInfo |
+            MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithUnloadedModules,
+        &exc, NULL, NULL);
+    CloseHandle(file);
+    fprintf(stderr, "crash: minidump %s to %s (err %lu)\n",
+            ok ? "written" : "FAILED", dump_path, ok ? 0 : GetLastError());
+    action = EXCEPTION_CONTINUE_SEARCH;
+  }
+  return action;
+}
+#endif
 
 static void _signal_handler(int sig) {
 #ifndef _WIN32
@@ -1687,6 +1754,11 @@ static void _shutdown(offsd_server_t* server, const char* pid_file) {
 /* The daemon body, shared by the console entry point and the Windows service
    ServiceMain. Returns the process exit code. */
 static int _run_offsd(int argc, char** argv) {
+#ifdef _WIN32
+  /* Install the crash-time minidump before anything else runs, so even a
+     startup-phase crash leaves evidence. */
+  SetUnhandledExceptionFilter(_crash_dump_filter);
+#endif
   /* Default arguments — string fields are heap-allocated so _free_args can
    * free them uniformly. _arg_string_set frees the prior (NULL after memset)
    * value and strdups the new one. */
