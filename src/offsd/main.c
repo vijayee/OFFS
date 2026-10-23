@@ -1013,18 +1013,40 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
   memset(api_key_plaintext, 0, strlen(api_key_plaintext));
   free(api_key_plaintext);
 
-  /* Block cache — wire config.max_capacity_bytes so the cache is actually
-     bounded. Passing 0 here (the old behavior) left the cache unbounded. */
-  server->block_cache = block_cache_create(server->config,
-      (char*)args->cache_dir, standard, server->timer,
-      server->pool, NULL, server->config.max_capacity_bytes);
-  if (server->block_cache == NULL) {
-    fprintf(stderr, "Failed to create block cache\n");
+  /* Authority — created BEFORE the block cache: the cache owns its
+     authority so block_cache_update_capacity can report phase/capacity and
+     arm the respiration exhale (liboffs node.c passes node->authority the
+     same way; passing NULL here disabled both permanently). */
+  server->authority = authority_create(&server->config);
+  if (server->authority == NULL) {
+    fprintf(stderr, "Failed to create authority\n");
+    if (server->http_server != NULL) http_server_destroy(server->http_server);
+    tuple_cache_destroy(server->tuple_cache);
+    ofd_cache_destroy(server->ofd_cache);
     timer_actor_destroy(server->timer);
     scheduler_pool_stop(server->pool);
     scheduler_pool_destroy(server->pool);
     return -1;
   }
+
+  /* Block cache — wire config.max_capacity_bytes so the cache is actually
+     bounded. Passing 0 here (the old behavior) left the cache unbounded. */
+  server->block_cache = block_cache_create(server->config,
+      (char*)args->cache_dir, standard, server->timer,
+      server->pool, server->authority, server->config.max_capacity_bytes);
+  if (server->block_cache == NULL) {
+    fprintf(stderr, "Failed to create block cache\n");
+    authority_destroy(server->authority);
+    timer_actor_destroy(server->timer);
+    scheduler_pool_stop(server->pool);
+    scheduler_pool_destroy(server->pool);
+    return -1;
+  }
+  /* Cache capacity/phase reporting starts immediately — the cache can load
+     above the exhale threshold and must evaluate it with the authority
+     wired. (network_create attaches the respiration actor later and
+     re-runs the evaluation itself; see liboffs network.c.) */
+  block_cache_update_capacity(server->block_cache);
 
   /* OFD cache */
   server->ofd_cache = ofd_cache_create(server->pool, server->block_cache, 300000);
@@ -1068,20 +1090,6 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
 
   /* Health context */
   _init_health_context(server, server->block_cache);
-
-  /* Authority */
-  server->authority = authority_create(&server->config);
-  if (server->authority == NULL) {
-    fprintf(stderr, "Failed to create authority\n");
-    if (server->http_server != NULL) http_server_destroy(server->http_server);
-    tuple_cache_destroy(server->tuple_cache);
-    ofd_cache_destroy(server->ofd_cache);
-    block_cache_destroy(server->block_cache);
-    timer_actor_destroy(server->timer);
-    scheduler_pool_stop(server->pool);
-    scheduler_pool_destroy(server->pool);
-    return -1;
-  }
 
   /* Wire TLS cert paths into authority before init */
   if (args->ca_cert_path != NULL) {
