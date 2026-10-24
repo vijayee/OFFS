@@ -296,6 +296,7 @@ typedef struct {
   const char* node_key_path;
   const char* relay_url;
   size_t      max_capacity_bytes;
+  uint32_t    eabf_base_ttl_ms;  // 0 = compiled default
   uint32_t    respiration_tau_min_ms;  // 0 = compiled default
   uint32_t    respiration_tau_max_ms;  // 0 = compiled default
   unsigned    unix_socket_mode;  // 0 = default 0666; octal, validated [0, 0777]
@@ -448,6 +449,16 @@ static int _parse_config_file(const char* path, offsd_args_t* args) {
     /* Inhale-seek throttle bounds (ms): how often a node below 50%
        capacity broadcasts WIRE_SEEKING_BLOCKS - ~10 s at 0% capacity
        easing to ~1 h at 49% by the compiled defaults; overridable here. */
+    cJSON* eabf_ttl = cJSON_GetObjectItem(network, "eabf-base-ttl-ms");
+    if (cJSON_IsNumber(eabf_ttl) && args->eabf_base_ttl_ms == 0) {
+      args->eabf_base_ttl_ms = (uint32_t)eabf_ttl->valuedouble;
+      if (args->eabf_base_ttl_ms < 64000) {
+        fprintf(stderr, "Invalid network[eabf-base-ttl-ms]: %u ms is below the 64-slot wheel floor (min 64000)\n",
+                args->eabf_base_ttl_ms);
+        cJSON_Delete(root);
+        return -1;
+      }
+    }
     cJSON* tau_min = cJSON_GetObjectItem(network, "respiration-tau-min-ms");
     if (cJSON_IsNumber(tau_min) && args->respiration_tau_min_ms == 0) {
       args->respiration_tau_min_ms = (uint32_t)tau_min->valuedouble;
@@ -958,6 +969,9 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
   }
   /* Inhale-seek throttle bounds from the config file ([network] section)
      or a future CLI flag; 0 keeps the compiled 10 s .. 1 h defaults. */
+  if (args->eabf_base_ttl_ms > 0) {
+    server->config.eabf_base_ttl_ms = args->eabf_base_ttl_ms;
+  }
   if (args->respiration_tau_min_ms > 0) {
     server->config.respiration_tau_min_ms = args->respiration_tau_min_ms;
   }
