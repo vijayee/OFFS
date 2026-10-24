@@ -296,6 +296,8 @@ typedef struct {
   const char* node_key_path;
   const char* relay_url;
   size_t      max_capacity_bytes;
+  uint32_t    respiration_tau_min_ms;  // 0 = compiled default
+  uint32_t    respiration_tau_max_ms;  // 0 = compiled default
   unsigned    unix_socket_mode;  // 0 = default 0666; octal, validated [0, 0777]
   const char* api_key;
   char*       bootstrap_peers;  // CSV of "host:port" network entry points
@@ -442,6 +444,24 @@ static int _parse_config_file(const char* path, offsd_args_t* args) {
     cJSON* max_cap = cJSON_GetObjectItem(network, "max-capacity-bytes");
     if (cJSON_IsNumber(max_cap) && args->max_capacity_bytes == 0) {
       args->max_capacity_bytes = (size_t)max_cap->valuedouble;
+    }
+    /* Inhale-seek throttle bounds (ms): how often a node below 50%
+       capacity broadcasts WIRE_SEEKING_BLOCKS - ~10 s at 0% capacity
+       easing to ~1 h at 49% by the compiled defaults; overridable here. */
+    cJSON* tau_min = cJSON_GetObjectItem(network, "respiration-tau-min-ms");
+    if (cJSON_IsNumber(tau_min) && args->respiration_tau_min_ms == 0) {
+      args->respiration_tau_min_ms = (uint32_t)tau_min->valuedouble;
+    }
+    cJSON* tau_max = cJSON_GetObjectItem(network, "respiration-tau-max-ms");
+    if (cJSON_IsNumber(tau_max) && args->respiration_tau_max_ms == 0) {
+      args->respiration_tau_max_ms = (uint32_t)tau_max->valuedouble;
+    }
+    if (args->respiration_tau_min_ms > 0 && args->respiration_tau_max_ms > 0 &&
+        args->respiration_tau_min_ms > args->respiration_tau_max_ms) {
+      fprintf(stderr, "Invalid network[respiration-tau-*]: min (%u ms) exceeds max (%u ms)\n",
+              args->respiration_tau_min_ms, args->respiration_tau_max_ms);
+      cJSON_Delete(root);
+      return -1;
     }
     cJSON* unix_mode = cJSON_GetObjectItem(network, "unix-socket-mode");
     if (unix_mode != NULL && !cJSON_IsString(unix_mode)) {
@@ -935,6 +955,14 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
    * block cache capacity is taken from the flag when present. */
   if (args->max_capacity_bytes > 0) {
     server->config.max_capacity_bytes = args->max_capacity_bytes;
+  }
+  /* Inhale-seek throttle bounds from the config file ([network] section)
+     or a future CLI flag; 0 keeps the compiled 10 s .. 1 h defaults. */
+  if (args->respiration_tau_min_ms > 0) {
+    server->config.respiration_tau_min_ms = args->respiration_tau_min_ms;
+  }
+  if (args->respiration_tau_max_ms > 0) {
+    server->config.respiration_tau_max_ms = args->respiration_tau_max_ms;
   }
 
   /* CLI --bootstrap overrides a staged pending config's bootstrap_peers,
