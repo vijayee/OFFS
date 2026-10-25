@@ -176,6 +176,7 @@ static LONG WINAPI _crash_dump_filter(struct _EXCEPTION_POINTERS* exception) {
     exc.ClientPointers = FALSE;
     BOOL ok = MiniDumpWriteDump(self, self_id, file,
         MiniDumpNormal | MiniDumpWithThreadInfo |
+            MiniDumpWithProcessThreadData |
             MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithUnloadedModules,
         &exc, NULL, NULL);
     CloseHandle(file);
