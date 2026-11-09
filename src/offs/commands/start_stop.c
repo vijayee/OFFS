@@ -3,9 +3,12 @@
 //
 
 #include "../client.h"
+#include "../cli_util.h"
 #include "../l10n/en.h"
 #include "../../Service/local_socket.h"
+#include "Platform/platform_local.h"
 #include "Platform/platform_time.h"
+#include "ClientAPI/client_api_wire.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -164,7 +167,24 @@ int cmd_start(int argc, char** argv, cli_client_t* client) {
 #endif
 }
 
+/* Socket liveness: a daemon bound to the CLI's --socket path answers a
+   connect. The service-query probe (`sc query offs-daemon`) only sees the
+   SCM service — it misses foreground daemons and (worse) stays "running"
+   while a test/foreground daemon at this socket actually stopped, so the
+   stop wait could report the wrong verdict. */
+static int _socket_daemon_up(void) {
+  platform_socket_t* probe = platform_local_connect(cli_socket_path());
+  if (probe == NULL) {
+    return 0;
+  }
+  platform_socket_destroy(probe);
+  return 1;
+}
+
 static int _is_daemon_running(void) {
+  if (_socket_daemon_up()) {
+    return 1;
+  }
 #ifdef _WIN32
   return system("sc query offs-daemon > nul 2>&1") == 0 ? 1 : 0;
 #else
@@ -178,20 +198,74 @@ int cli_daemon_is_running(void) {
 }
 
 int cli_daemon_wait_stopped(int timeout_ms) {
+  /* Wait on the SOCKET the stop targeted, not the service query — with an
+     installed service also present, `sc query offs-daemon` stays "running"
+     forever and this would time out even after the daemon at the socket
+     exited. */
   int waited_ms = 0;
-  while (_is_daemon_running() && waited_ms < timeout_ms) {
+  while (_socket_daemon_up() && waited_ms < timeout_ms) {
     platform_sleep_ms(100);
     waited_ms += 100;
   }
-  return _is_daemon_running() ? -1 : 0;
+  return _socket_daemon_up() ? -1 : 0;
 }
 
 int cmd_stop(int argc, char** argv, cli_client_t* client) {
-  (void)argc; (void)argv; (void)client;
+  (void)argc; (void)argv;
 
   if (!_is_daemon_running()) {
     fprintf(stderr, "%s\n", L10N_DAEMON_UNREACHABLE);
     return 1;
+  }
+
+  /* Preferred path: graceful stop over the RPC socket (CLIENT_API_STOP_REQUEST).
+     The daemon runs its normal teardown and exits — this works for the SCM
+     service and a foreground daemon, and needs no service-control rights
+     (a non-elevated `sc stop offs-daemon` is denied). The shutdown tears the
+     connection down, so a missing/broken reply after a successful send is
+     treated as success if the daemon then exits. main.c skips the connection
+     for stop (daemon may be on another socket), so connect here. */
+  if (client == NULL) {
+    client = cli_client_create(cli_socket_path());
+    if (client != NULL && cli_client_connect(client) != 0) {
+      cli_client_destroy(client);
+      client = NULL;
+    }
+  }
+  if (client != NULL) {
+    cbor_item_t* request = client_api_stop_request_encode();
+    cbor_item_t* response = cli_client_send(client, request);
+    cbor_decref(&request);
+    if (response != NULL) {
+      int stopped = -1;
+      if (client_api_wire_get_type(response) == CLIENT_API_STOP_RESPONSE) {
+        client_api_stop_response_t resp;
+        memset(&resp, 0, sizeof(resp));
+        if (client_api_stop_response_decode(response, &resp) == 0 && resp.status == 0) {
+          stopped = 0;
+        }
+        client_api_stop_response_destroy(&resp);
+      } else {
+        cli_print_error_if(response);
+      }
+      cbor_decref(&response);
+      if (stopped != 0) {
+        return 1;
+      }
+      if (cli_daemon_wait_stopped(45000) != 0) {
+        fprintf(stderr, "Daemon did not stop within 45s\n");
+        return 1;
+      }
+      printf("%s\n", L10N_DAEMON_STOPPED);
+      return 0;
+    }
+    /* The daemon may have torn the socket down before replying: accept an
+       exit within the wait window as a successful stop. */
+    if (cli_daemon_wait_stopped(45000) == 0) {
+      printf("%s\n", L10N_DAEMON_STOPPED);
+      return 0;
+    }
+    fprintf(stderr, "Remote stop did not take effect; falling back\n");
   }
 
 #ifdef _WIN32
