@@ -210,6 +210,19 @@ static void _request_restart(void* user_data) {
   ATOMIC_STORE(&g_restart_requested, 1);
 }
 
+/* Remote-stop trigger wired into the unix transport (CLIENT_API_STOP_REQUEST
+   from `offs stop`). Runs on a pool worker thread; atomics only — the main
+   loop observes running=0 and performs the full teardown on the main thread,
+   exactly like the SCM stop path. Works for both the installed service (the
+   process exit transitions the SCM to STOPPED — no caller service-rights
+   needed) and a foreground daemon. */
+static void _request_stop(void* user_data) {
+  (void)user_data;
+  if (g_node != NULL) {
+    ATOMIC_STORE(&g_node->running, 0);
+  }
+}
+
 /* SCM stop notification (Windows service). Runs on the SCM's control-handler
    thread, so it must only touch atomics — the main loop observes the flag
    and performs the full teardown on its own thread. */
@@ -285,6 +298,7 @@ typedef struct {
   const char* unix_path;
   const char* cache_dir;
   const char* config_dir;
+  uint8_t     delete_blocks_on_put_failure;  /* config-file [cache]: 0 = default (on), 1 = on, 2 = off */
   const char* pid_file;
   int         worker_count;
   int         foreground;
@@ -529,6 +543,12 @@ static int _parse_config_file(const char* path, offsd_args_t* args) {
     if (cJSON_IsString(cache_dir) && args->cache_dir == NULL) {
       args->cache_dir = strdup(cache_dir->valuestring);
       if (args->cache_dir == NULL) { cJSON_Delete(root); return -1; }
+    }
+    /* delete-blocks-on-put-failure (default on): a failed/aborted PUT deletes
+       the blocks it freshly created, regardless of pin status. */
+    cJSON* del_on_fail = cJSON_GetObjectItem(cache, "delete-blocks-on-put-failure");
+    if (del_on_fail != NULL && cJSON_IsBool(del_on_fail)) {
+      args->delete_blocks_on_put_failure = cJSON_IsTrue(del_on_fail) ? 1u : 2u;
     }
   }
 
@@ -978,6 +998,11 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
   }
   if (args->respiration_tau_max_ms > 0) {
     server->config.respiration_tau_max_ms = args->respiration_tau_max_ms;
+  }
+  /* Failed-PUT block cleanup comes from the config file's [cache] section;
+     0 = keep the compiled default (on). */
+  if (args->delete_blocks_on_put_failure != 0) {
+    server->config.delete_blocks_on_put_failure = (bool)(args->delete_blocks_on_put_failure == 1);
   }
 
   /* CLI --bootstrap overrides a staged pending config's bootstrap_peers,
@@ -1433,6 +1458,9 @@ static int _startup(offsd_server_t* server, offsd_args_t* args,
        offs_node_restart on this pool worker. */
     unix_transport_set_config_ctx(server->unix_transport, &server->node,
                                   args->config_dir, _request_restart, NULL);
+    /* `offs stop`: graceful daemon shutdown over the RPC socket (the CLI does
+       not need the service-control rights `sc stop offs-daemon` demands). */
+    unix_transport_set_stop_ctx(server->unix_transport, _request_stop, NULL);
   }
 
   /* Update actor — auto-update checks.
